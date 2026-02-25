@@ -1,26 +1,19 @@
 import argparse
-from pathlib import Path
 import sys
-import re
-import json
+from pathlib import Path
 from strings_lint.reporter import report_issues
 from strings_lint.scanner import find_strings_files
 from strings_lint.validator import validate_file
 
 def main():
     errors = []
-    files_with_errors = set()
-    
     args = parse_args()
     root_path = Path(args.root)
     
     if not root_path.exists():
-        print("Error: root path does not exist")
-        sys.exit(1)
-
+        fail("root path does not exist")
     if not root_path.is_dir():
-        print("Error: root path is not a directory")
-        sys.exit(1)
+        fail("root path is not a directory")
     
     print("Scanning root:", root_path)
     # Parse CLI arguments and scan the repository for .strings files.
@@ -42,9 +35,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", default=".", help="Root directory to scan")
     parser.add_argument("--exclude", default="", help="EN: Regex for paths to exclude. ES: Regex de rutas a excluir.")
     parser.add_argument("--include", default=r"\.strings$", help="EN: Regex for paths to include. ES: Regex para incluir rutas.")
-    parser.add_argument("--format", choices=["text", "json"], default="text", help="EN: Output format. ES: Formato de salida.")
-    parser.add_argument("--fail-on", choices=["errors", "warnings"], default="errors", help="EN: Exit with failure on errors or warnings. ES: Fallar por errores o también por avisos.")
+    parser.add_argument("--format", choices=["text", "json"], default="text", help="EN: Default text output format. ES: Formato de salida por defecto texto.")
+    parser.add_argument("--fail-on", choices=["errors", "warnings"], default="errors", help="EN: Exit with failure on errors or warnings. ES: Fallar por errores o por avisos.")
     return parser.parse_args()
+
+def fail(msg: str, code: int = 1) -> None:
+    print(f"Error: {msg}")
+    sys.exit(code)
 
 if __name__ == "__main__":
     main()

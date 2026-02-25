@@ -1,3 +1,6 @@
+import json
+
+
 def report_issues(issues: list[dict], *, files_scanned: int, fail_on: str, output_format: str) -> int:
     """
     EN: Print a human-readable report and return the process exit code.
