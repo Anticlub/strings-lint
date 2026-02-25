@@ -51,8 +51,8 @@ def main():
                                 "severity": "WARNING"
                             }
                             errors.append(error)
-                            continue
-
+                        
+                        continue
                     
                     if line == "":
                         continue
@@ -64,6 +64,21 @@ def main():
                             block_comment_start_line = line_number
                             block_comment_start_snippet = line[:80]
                         continue
+                    
+                    # Any non-empty line must be a comment or a quoted entry in this MVP.
+                    # EN: Any non-empty line must be a comment or a quoted entry in this MVP.
+                    # ES: En este MVP, cualquier línea no vacía debe ser comentario o una entrada entrecomillada.
+                    if not line.startswith('"'):
+                        error = {
+                            "file": str(file),
+                            "line": line_number,
+                            "code": "UNEXPECTED_LINE",
+                            "snippet": line[:80],
+                            "severity": "ERROR"
+                        }
+                        errors.append(error)
+                        continue
+                    
                     # A missing semicolon prevents reliable parsing of the entry.
                     if not line.endswith(";"):
                         error = {
@@ -112,7 +127,13 @@ def main():
                                 }
                                 errors.append(error)
                                 continue
-
+                            
+                            key_inner = left[1:-1] # Remove the surrounding quotes for validation.
+                            value_inner = right[1:-1] # Remove the surrounding quotes for validation.
+                            
+                            errors.extend(validate_escapes(key_inner, file=file, line_number=line_number, original_line=line, field="key"))
+                            errors.extend(validate_escapes(value_inner, file=file, line_number=line_number, original_line=line, field="value"))
+                            
                 # Skip all lines until the end of the block comment is found.
                 if inside_block_comment:
                     error = {
@@ -153,6 +174,47 @@ def main():
         sys.exit(1)
     else:
         sys.exit(0)
+        
+def validate_escapes(text: str, *, file: Path, line_number: int, original_line: str, field: str) -> list[dict]:
+    """
+    Validate escape sequences inside a quoted .strings key/value.
+
+    EN: Validate escape sequences inside a quoted .strings key/value.
+    ES: Validar secuencias de escape dentro de un key/value entrecomillado.
+    """
+    issues: list[dict] = []
+    allowed = {'\\', '"', 'n', 'r', 't'}
+    i = 0
+    while i < len(text):
+        if text[i] != '\\':
+            i += 1
+            continue
+
+        # We found a backslash: validate the escape sequence.
+        # EN: We found a backslash: validate the escape sequence.
+        # ES: Hemos encontrado una barra invertida: validar la secuencia de escape.
+        if i == len(text) - 1:
+            issues.append({
+                "file": str(file),
+                "line": line_number,
+                "code": "INCOMPLETE_ESCAPE_SEQUENCE",
+                "snippet": original_line[:80],
+                "severity": "ERROR",
+            })
+            break
+
+        next_ch = text[i + 1]
+        if next_ch not in allowed:
+            issues.append({
+                "file": str(file),
+                "line": line_number,
+                "code": "INVALID_ESCAPE_SEQUENCE",
+                "snippet": original_line[:80],
+                "severity": "ERROR",
+            })
+
+        i += 2
+    return issues
 
 if __name__ == "__main__":
     main()
