@@ -7,9 +7,7 @@ def main():
     errors = []
     files_with_errors = set()
     
-    parser = argparse.ArgumentParser(description="Validate .strings files")
-    parser.add_argument("--root", default=".", help="Root directory to scan")
-    args = parser.parse_args()
+    args = parse_args()
     root_path = Path(args.root)
     
     if not root_path.exists():
@@ -22,133 +20,11 @@ def main():
     
     print("Scanning root:", root_path)
     # Parse CLI arguments and scan the repository for .strings files.
-    strings_files = list(root_path.rglob("*.strings"))
+    strings_files = find_strings_files(root_path)
     print(f"Found {len(strings_files)} .strings files")
     
-    for file in strings_files:
-        inside_block_comment = False
-        block_comment_start_line = None
-        block_comment_start_snippet = ""
-        try:
-            with open(file, "r", encoding="utf-8") as f:
-                # Validate entry structure following a strict one-entry-per-line MVP rule.
-                for line_number, line in enumerate(f, start=1):
-                    line = line.strip()
-                    # Skip all lines until the end of the block comment is found.
-                    if inside_block_comment:
-                        if "*/" in line:
-                            inside_block_comment = False
-                            block_comment_start_line = None
-                            block_comment_start_snippet = ""
-                            continue
-                    
-                        if line.startswith('"') and "=" in line and line.endswith(";"):
-                            error = {
-                                "file": str(file),
-                                "line": line_number,
-                                "code": "BLOCK_COMMENT_WITH_ENTRY",
-                                "snippet": line[:80],
-                                "severity": "WARNING"
-                            }
-                            errors.append(error)
-                        
-                        continue
-                    
-                    if line == "":
-                        continue
-                    if line.startswith("//"):
-                        continue
-                    if line.startswith("/*"):
-                        if "*/" not in line: # Enter block comment mode if the comment is not closed on the same line.
-                            inside_block_comment = True
-                            block_comment_start_line = line_number
-                            block_comment_start_snippet = line[:80]
-                        continue
-                    
-                    # Any non-empty line must be a comment or a quoted entry in this MVP.
-                    # EN: Any non-empty line must be a comment or a quoted entry in this MVP.
-                    # ES: En este MVP, cualquier línea no vacía debe ser comentario o una entrada entrecomillada.
-                    if not line.startswith('"'):
-                        error = {
-                            "file": str(file),
-                            "line": line_number,
-                            "code": "UNEXPECTED_LINE",
-                            "snippet": line[:80],
-                            "severity": "ERROR"
-                        }
-                        errors.append(error)
-                        continue
-                    
-                    # A missing semicolon prevents reliable parsing of the entry.
-                    if not line.endswith(";"):
-                        error = {
-                            "file": str(file),
-                            "line": line_number,
-                            "code": "MISSING_SEMICOLON",
-                            "snippet": line[:80],
-                            "severity": "ERROR"
-                        }
-                        errors.append(error)
-                        continue
-                    else:
-                        if "=" not in line:
-                            error = {
-                                "file": str(file),
-                                "line": line_number,
-                                "code": "MISSING_EQUALS_SIGN",
-                                "snippet": line[:80],
-                                "severity": "ERROR"
-                            }
-                            errors.append(error)
-                            continue
-                        else:
-                            # Split only on the first "=" to allow "=" inside values.
-                            parts = line[:-1].split("=", 1) 
-                            left = parts[0].strip()
-                            right = parts[1].strip()
-
-                            if (not left.startswith('"')) or (not left.endswith('"')):
-                                error = {
-                                    "file": str(file),
-                                    "line": line_number,
-                                    "code": "INVALID_KEY_QUOTING",
-                                    "snippet": line[:80],
-                                    "severity": "ERROR"
-                                }
-                                errors.append(error)
-                                continue
-                            if (not right.startswith('"')) or (not right.endswith('"')):
-                                error = {
-                                    "file": str(file),
-                                    "line": line_number,
-                                    "code": "INVALID_VALUE_QUOTING",
-                                    "snippet": line[:80],
-                                    "severity": "ERROR"
-                                }
-                                errors.append(error)
-                                continue
-                            
-                            key_inner = left[1:-1] # Remove the surrounding quotes for validation.
-                            value_inner = right[1:-1] # Remove the surrounding quotes for validation.
-                            
-                            errors.extend(validate_escapes(key_inner, file=file, line_number=line_number, original_line=line, field="key"))
-                            errors.extend(validate_escapes(value_inner, file=file, line_number=line_number, original_line=line, field="value"))
-                            
-                # Skip all lines until the end of the block comment is found.
-                if inside_block_comment:
-                    error = {
-                        "file": str(file),
-                        "line": block_comment_start_line,
-                        "code": "UNCLOSED_BLOCK_COMMENT",
-                        "snippet": block_comment_start_snippet,
-                        "severity": "ERROR"
-                    }
-                    errors.append(error)
-                    inside_block_comment = False
-                    
-        # Report non-UTF-8 files as read errors (required by the spec).
-        except UnicodeDecodeError:
-            print(f"Encoding error in file: {file}")
+    for file_path in strings_files:
+        errors.extend(validate_file(file_path))
     
     for error in errors:
         files_with_errors.add(error["file"])
@@ -175,6 +51,160 @@ def main():
     else:
         sys.exit(0)
         
+def parse_args() -> argparse.Namespace:
+    """
+    EN: Parse command-line arguments for the validator CLI.
+    ES: Parsear los argumentos de línea de comandos del CLI del validador.
+    """
+    parser = argparse.ArgumentParser(description="Validate .strings files")
+    parser.add_argument("--root", default=".", help="Root directory to scan")
+    return parser.parse_args()
+
+def find_strings_files(root_path: Path) -> list[Path]:
+    """
+    EN: Recursively find all .strings files under the given root path.
+    ES: Buscar recursivamente todos los ficheros .strings bajo el directorio root.
+    """
+    return list(root_path.rglob("*.strings"))
+
+def validate_file(file_path: Path) -> list[dict]:
+    """
+    EN: Validate a single .strings file and return a list of issues (errors/warnings).
+    ES: Validar un fichero .strings y devolver una lista de incidencias (errores/avisos).
+    """
+    issues: list[dict] = []
+    inside_block_comment = False
+    block_comment_start_line = None
+    block_comment_start_snippet = ""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            # Validate entry structure following a strict one-entry-per-line MVP rule.
+            for line_number, line in enumerate(f, start=1):
+                line = line.strip()
+                # Skip all lines until the end of the block comment is found.
+                if inside_block_comment:
+                    if "*/" in line:
+                        inside_block_comment = False
+                        block_comment_start_line = None
+                        block_comment_start_snippet = ""
+                        continue
+                    
+                    if line.startswith('"') and "=" in line and line.endswith(";"):
+                        error = {
+                            "file": str(file_path),
+                            "line": line_number,
+                            "code": "BLOCK_COMMENT_WITH_ENTRY",
+                            "snippet": line[:80],
+                            "severity": "WARNING"
+                        }
+                        issues.append(error)
+                        
+                    continue
+                    
+                if line == "":
+                    continue
+                if line.startswith("//"):
+                    continue
+                if line.startswith("/*"):
+                    if "*/" not in line: # Enter block comment mode if the comment is not closed on the same line.
+                        inside_block_comment = True
+                        block_comment_start_line = line_number
+                        block_comment_start_snippet = line[:80]
+                    continue
+                
+                # Any non-empty line must be a comment or a quoted entry in this MVP.
+                # EN: Any non-empty line must be a comment or a quoted entry in this MVP.
+                # ES: En este MVP, cualquier línea no vacía debe ser comentario o una entrada entrecomillada.
+                if not line.startswith('"'):
+                    error = {
+                        "file": str(file_path),
+                        "line": line_number,
+                        "code": "UNEXPECTED_LINE",
+                        "snippet": line[:80],
+                        "severity": "ERROR"
+                    }
+                    issues.append(error)
+                    continue
+                
+                # A missing semicolon prevents reliable parsing of the entry.
+                if not line.endswith(";"):
+                    error = {
+                        "file": str(file_path),
+                        "line": line_number,
+                        "code": "MISSING_SEMICOLON",
+                        "snippet": line[:80],
+                        "severity": "ERROR"
+                    }
+                    issues.append(error)
+                    continue
+                else:
+                    if "=" not in line:
+                        error = {
+                            "file": str(file_path),
+                            "line": line_number,
+                            "code": "MISSING_EQUALS_SIGN",
+                            "snippet": line[:80],
+                            "severity": "ERROR"
+                        }
+                        issues.append(error)
+                        continue
+                    else:
+                        # Split only on the first "=" to allow "=" inside values.
+                        parts = line[:-1].split("=", 1) 
+                        left = parts[0].strip()
+                        right = parts[1].strip()
+                        
+                        if (not left.startswith('"')) or (not left.endswith('"')):
+                            error = {
+                                "file": str(file_path),
+                                "line": line_number,
+                                "code": "INVALID_KEY_QUOTING",
+                                "snippet": line[:80],
+                                "severity": "ERROR"
+                            }
+                            issues.append(error)
+                            continue
+                        if (not right.startswith('"')) or (not right.endswith('"')):
+                            error = {
+                                "file": str(file_path),
+                                "line": line_number,
+                                "code": "INVALID_VALUE_QUOTING",
+                                "snippet": line[:80],
+                                "severity": "ERROR"
+                            }
+                            issues.append(error)
+                            continue
+                        
+                        key_inner = left[1:-1] # Remove the surrounding quotes for validation.
+                        value_inner = right[1:-1] # Remove the surrounding quotes for validation.
+                            
+                        issues.extend(validate_escapes(key_inner, file=file_path, line_number=line_number, original_line=line, field="key"))
+                        issues.extend(validate_escapes(value_inner, file=file_path, line_number=line_number, original_line=line, field="value"))
+                            
+            # Skip all lines until the end of the block comment is found.
+            if inside_block_comment:
+                error = {
+                    "file": str(file_path),
+                    "line": block_comment_start_line,
+                    "code": "UNCLOSED_BLOCK_COMMENT",
+                    "snippet": block_comment_start_snippet,
+                    "severity": "ERROR"
+                }
+                issues.append(error)
+                inside_block_comment = False
+                    
+    # Report non-UTF-8 files as read errors (required by the spec).
+    except UnicodeDecodeError:
+        error = {
+            "file": str(file_path),
+            "line": None,
+            "code": "FILE_READ_ERROR",
+            "snippet": "",
+            "severity": "ERROR" 
+        }
+        issues.append(error)
+    return issues
+
 def validate_escapes(text: str, *, file: Path, line_number: int, original_line: str, field: str) -> list[dict]:
     """
     Validate escape sequences inside a quoted .strings key/value.
