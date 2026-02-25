@@ -26,30 +26,8 @@ def main():
     for file_path in strings_files:
         errors.extend(validate_file(file_path))
     
-    for error in errors:
-        files_with_errors.add(error["file"])
-        
-    for error in errors:
-        print(f"{error['severity']} {error['code']}")
-        print(f"   File: {error['file']}")
-        print(f"   Line: {error['line']}")
-        print(f"   Snippet: {error['snippet']}")
-        print(f"   Severity: {error['severity']}")
-        print()
-    
-    error_count = sum(1 for e in errors if e["severity"] == "ERROR")
-    warning_count = sum(1 for e in errors if e["severity"] == "WARNING")
-    
-    print("---")
-    print(f"Files scanned: {len(strings_files)}")
-    print(f"Error count: {error_count}")
-    print(f"Warning count: {warning_count}")
-    print(f"Files with errors: {len(files_with_errors)}")
-    
-    if error_count > 0:
-        sys.exit(1)
-    else:
-        sys.exit(0)
+    exit_code = report_issues(errors, files_scanned=len(strings_files))
+    sys.exit(exit_code)
         
 def parse_args() -> argparse.Namespace:
     """
@@ -245,6 +223,39 @@ def validate_escapes(text: str, *, file: Path, line_number: int, original_line: 
 
         i += 2
     return issues
+
+def report_issues(issues: list[dict], *, files_scanned: int) -> int:
+    """
+    EN: Print a human-readable report and return the process exit code.
+    ES: Imprimir un reporte legible y devolver el código de salida del proceso.
+    """
+    issues_by_file: dict[str, list[dict]] = {}
+    for issue in issues:
+        issues_by_file.setdefault(issue["file"], []).append(issue)
+        
+    for file_path in sorted(issues_by_file.keys()):
+        file_issues = issues_by_file[file_path]
+        print(f"\n{file_path}")
+        print("-" * len(file_path))
+
+        for issue in file_issues:
+            line = issue.get("line")
+            line_str = str(line) if line is not None else "-"
+            print(f"{issue['severity']} {issue['code']} (line {line_str})")
+            print(f"  {issue['snippet']}")
+    
+    error_count = sum(1 for i in issues if i["severity"] == "ERROR")
+    warning_count = sum(1 for i in issues if i["severity"] == "WARNING")
+
+    files_with_errors = {i["file"] for i in issues if i["severity"] == "ERROR"}
+
+    print("\n---")
+    print(f"Files scanned: {files_scanned}")
+    print(f"Files with errors: {len(files_with_errors)}")
+    print(f"Total errors: {error_count}")
+    print(f"Total warnings: {warning_count}")
+
+    return 1 if error_count > 0 else 0
 
 if __name__ == "__main__":
     main()
