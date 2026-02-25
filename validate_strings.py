@@ -1,7 +1,8 @@
 import argparse
 from pathlib import Path
 import sys
-
+import re
+import json
 
 def main():
     errors = []
@@ -20,36 +21,14 @@ def main():
     
     print("Scanning root:", root_path)
     # Parse CLI arguments and scan the repository for .strings files.
-    strings_files = find_strings_files(root_path)
+    strings_files = find_strings_files(root_path, include_pattern=args.include, exclude_pattern=args.exclude)
     print(f"Found {len(strings_files)} .strings files")
     
     for file_path in strings_files:
         errors.extend(validate_file(file_path))
     
-    for error in errors:
-        files_with_errors.add(error["file"])
-        
-    for error in errors:
-        print(f"{error['severity']} {error['code']}")
-        print(f"   File: {error['file']}")
-        print(f"   Line: {error['line']}")
-        print(f"   Snippet: {error['snippet']}")
-        print(f"   Severity: {error['severity']}")
-        print()
-    
-    error_count = sum(1 for e in errors if e["severity"] == "ERROR")
-    warning_count = sum(1 for e in errors if e["severity"] == "WARNING")
-    
-    print("---")
-    print(f"Files scanned: {len(strings_files)}")
-    print(f"Error count: {error_count}")
-    print(f"Warning count: {warning_count}")
-    print(f"Files with errors: {len(files_with_errors)}")
-    
-    if error_count > 0:
-        sys.exit(1)
-    else:
-        sys.exit(0)
+    exit_code = report_issues(errors, files_scanned=len(strings_files), fail_on=args.fail_on, output_format=args.format)
+    sys.exit(exit_code)
         
 def parse_args() -> argparse.Namespace:
     """
@@ -58,14 +37,39 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="Validate .strings files")
     parser.add_argument("--root", default=".", help="Root directory to scan")
+    parser.add_argument("--exclude", default="", help="EN: Regex for paths to exclude. ES: Regex de rutas a excluir.")
+    parser.add_argument("--include", default=r"\.strings$", help="EN: Regex for paths to include. ES: Regex para incluir rutas.")
+    parser.add_argument("--format", choices=["text", "json"], default="text", help="EN: Output format. ES: Formato de salida.")
+    parser.add_argument("--fail-on", choices=["errors", "warnings"], default="errors", help="EN: Exit with failure on errors or warnings. ES: Fallar por errores o también por avisos.")
     return parser.parse_args()
 
-def find_strings_files(root_path: Path) -> list[Path]:
+def find_strings_files(root_path: Path, *, include_pattern: str, exclude_pattern: str) -> list[Path]:
     """
-    EN: Recursively find all .strings files under the given root path.
-    ES: Buscar recursivamente todos los ficheros .strings bajo el directorio root.
+    EN: Recursively find files matching include regex and not matching exclude regex.
+    ES: Buscar recursivamente ficheros que cumplan el include regex y no el exclude regex.
     """
-    return list(root_path.rglob("*.strings"))
+    include_re = re.compile(include_pattern)
+    exclude_re = re.compile(exclude_pattern) if exclude_pattern else None
+
+    matched_files: list[Path] = []
+
+    for path in root_path.rglob("*"):
+        if not path.is_file():
+            continue
+
+        path_str = str(path.as_posix())
+
+        # Skip excluded paths
+        if exclude_re and exclude_re.search(path_str):
+            continue
+
+        # Skip non-included paths
+        if not include_re.search(path_str):
+            continue
+
+        matched_files.append(path)
+
+    return matched_files
 
 def validate_file(file_path: Path) -> list[dict]:
     """
@@ -245,6 +249,62 @@ def validate_escapes(text: str, *, file: Path, line_number: int, original_line: 
 
         i += 2
     return issues
+
+def report_issues(issues: list[dict], *, files_scanned: int, fail_on: str, output_format: str) -> int:
+    """
+    EN: Print a human-readable report and return the process exit code.
+    ES: Imprimir un reporte legible y devolver el código de salida del proceso.
+    """
+    issues_by_file: dict[str, list[dict]] = {}
+    for issue in issues:
+        issues_by_file.setdefault(issue["file"], []).append(issue)
+        
+    for file_path in sorted(issues_by_file.keys()):
+        file_issues = issues_by_file[file_path]
+        print(f"\n{file_path}")
+        print("-" * len(file_path))
+
+        for issue in file_issues:
+            line = issue.get("line")
+            line_str = str(line) if line is not None else "-"
+            print(f"{issue['severity']} {issue['code']} (line {line_str})")
+            print(f"  {issue['snippet']}")
+    
+    error_count = sum(1 for i in issues if i["severity"] == "ERROR")
+    warning_count = sum(1 for i in issues if i["severity"] == "WARNING")
+
+    files_with_errors = {i["file"] for i in issues if i["severity"] == "ERROR"}
+
+    summary = {
+    "files_scanned": files_scanned,
+    "files_with_errors": len(files_with_errors),
+    "error_count": error_count,
+    "warning_count": warning_count,
+    }
+    
+    if output_format == "json":
+        payload = {
+            **summary,
+            "issues": issues,
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        if fail_on == "warnings":
+            return 1 if (error_count > 0 or warning_count > 0) else 0
+
+        # default: fail only on errors
+        return 1 if error_count > 0 else 0
+    
+    print("\n---")
+    print(f"Files scanned: {files_scanned}")
+    print(f"Files with errors: {len(files_with_errors)}")
+    print(f"Total errors: {error_count}")
+    print(f"Total warnings: {warning_count}")
+
+    if fail_on == "warnings":
+        return 1 if (error_count > 0 or warning_count > 0) else 0
+
+    # default: fail only on errors
+    return 1 if error_count > 0 else 0
 
 if __name__ == "__main__":
     main()
