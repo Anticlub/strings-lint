@@ -7,9 +7,11 @@ def validate_file(file_path: Path) -> list[dict]:
     ES: Validar un fichero .strings y devolver una lista de incidencias (errores/avisos).
     """
     issues: list[dict] = []
+    seen_keys: dict[str, int] = {}
     inside_block_comment = False
     block_comment_start_line = None
     block_comment_start_snippet = ""
+    
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             # Validate entry structure following a strict one-entry-per-line MVP rule.
@@ -110,6 +112,18 @@ def validate_file(file_path: Path) -> list[dict]:
                             continue
                         
                         key_inner = left[1:-1] # Remove the surrounding quotes for validation.
+                        if key_inner in seen_keys:
+                            error = {
+                                "file": str(file_path),
+                                "line": line_number,
+                                "code": "DUPLICATE_KEY",
+                                "snippet": line[:80],
+                                "severity": "ERROR"
+                            }
+                            issues.append(error)
+                        else:
+                            seen_keys[key_inner] = line_number
+                            
                         value_inner = right[1:-1] # Remove the surrounding quotes for validation.
                             
                         issues.extend(validate_escapes(key_inner, file=file_path, line_number=line_number, original_line=line, field="key"))
