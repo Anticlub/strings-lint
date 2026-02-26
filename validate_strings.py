@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from strings_lint.reporter import report_issues
 from strings_lint.scanner import find_strings_files
-from strings_lint.validator import validate_file
+from strings_lint.validator import validate_file, validate_locale_consistency
 
 def main():
     errors = []
@@ -16,16 +16,21 @@ def main():
         fail("root path is not a directory")
     
     print("Scanning root:", root_path)
+    
     # Parse CLI arguments and scan the repository for .strings files.
     strings_files = find_strings_files(root_path, include_pattern=args.include, exclude_pattern=args.exclude)
     print(f"Found {len(strings_files)} .strings files")
     
+    # Validate each .strings file and collect all errors.
     for file_path in strings_files:
         errors.extend(validate_file(file_path))
+        
+    # Validate that all locales have the same keys and report any inconsistencies.
+    errors.extend(validate_locale_consistency(strings_files))
     
     exit_code = report_issues(errors, files_scanned=len(strings_files), fail_on=args.fail_on, output_format=args.format)
     sys.exit(exit_code)
-        
+
 def parse_args() -> argparse.Namespace:
     """
     EN: Parse command-line arguments for the validator CLI.

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 
 def validate_file(file_path: Path) -> list[dict]:
@@ -192,4 +193,113 @@ def validate_escapes(text: str, *, file: Path, line_number: int, original_line: 
             })
 
         i += 2
+    return issues
+
+def extract_keys(file_path: Path) -> set[str]:
+    """
+    Extract the set of keys from a .strings file, ignoring parsing errors.
+
+    EN: Extract the set of keys from a .strings file, ignoring parsing errors.
+    ES: Extraer el conjunto de claves de un fichero .strings, ignorando errores de parseo.
+    """
+    keys: set[str] = set()
+    inside_block_comment = False
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+
+                # Handle block comments (/* ... */), including multiline.
+                if inside_block_comment:
+                    if "*/" in line:
+                        inside_block_comment = False
+                    continue
+
+                if not line:
+                    continue
+                if line.startswith("//"):
+                    continue
+                if line.startswith("/*"):
+                    # If not closed on the same line, enter block-comment mode.
+                    if "*/" not in line:
+                        inside_block_comment = True
+                    continue
+
+                # MVP rule: one entry per line, must be a quoted entry.
+                if not (line.startswith('"') and line.endswith(";") and "=" in line):
+                    continue
+
+                # Split only on the first '=' to allow '=' inside values.
+                parts = line[:-1].split("=", 1)
+                left = parts[0].strip()
+
+                # Only accept well-quoted keys.
+                if left.startswith('"') and left.endswith('"'):
+                    key_inner = left[1:-1]
+                    keys.add(key_inner)
+
+    except (OSError, UnicodeDecodeError):
+        # Ignore read/encoding failures here; the main validator reports them.
+        return set()
+
+    return keys
+
+def _get_locale_from_path(file_path: Path) -> Optional[str]:
+    """
+    EN: Extract locale code from a path containing an `xx.lproj` directory.
+    ES: Extraer el código de idioma de una ruta que contenga un directorio `xx.lproj`.
+    """
+    for part in file_path.parts:
+        if part.endswith(".lproj"):
+            return part[:-len(".lproj")]
+    return None
+
+def validate_locale_consistency(files: list[Path]) -> list[dict]:
+    """
+    EN: Validate that localized variants of the same .strings file share the same keys.
+    ES: Validar que las variantes por idioma del mismo fichero .strings tengan las mismas claves.
+
+    Baseline rule (MVP):
+    - If `en.lproj` exists for a group, use it as baseline.
+    - Otherwise, use the first locale found.
+
+    This MVP reports only missing keys (MISSING_KEY_IN_LOCALE).
+    """
+    issues: list[dict] = []
+
+    # Group by base filename, then locale.
+    groups: dict[str, dict[str, Path]] = {}
+    for file_path in files:
+        locale = _get_locale_from_path(file_path)
+        if locale is None:
+            continue
+
+        base_name = file_path.name
+        groups.setdefault(base_name, {})[locale] = file_path
+
+    for base_name, locale_map in groups.items():
+        if len(locale_map) < 2:
+            continue
+
+        baseline_locale = "en" if "en" in locale_map else next(iter(locale_map.keys()))
+        baseline_path = locale_map[baseline_locale]
+        baseline_keys = extract_keys(baseline_path)
+
+        for locale, path in locale_map.items():
+            if locale == baseline_locale:
+                continue
+
+            current_keys = extract_keys(path)
+            missing = baseline_keys - current_keys
+
+            for key in sorted(missing):
+                issues.append({
+                    "file": str(path),
+                    "line": None,
+                    "code": "MISSING_KEY_IN_LOCALE",
+                    "snippet": f'"{key}"',
+                    "severity": "ERROR",
+                })
+
     return issues
