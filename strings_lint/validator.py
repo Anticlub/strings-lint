@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Optional
+import re
 
 
 def validate_file(file_path: Path) -> list[dict]:
@@ -195,56 +196,6 @@ def validate_escapes(text: str, *, file: Path, line_number: int, original_line: 
         i += 2
     return issues
 
-def extract_keys(file_path: Path) -> set[str]:
-    """
-    Extract the set of keys from a .strings file, ignoring parsing errors.
-
-    EN: Extract the set of keys from a .strings file, ignoring parsing errors.
-    ES: Extraer el conjunto de claves de un fichero .strings, ignorando errores de parseo.
-    """
-    keys: set[str] = set()
-    inside_block_comment = False
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-
-                # Handle block comments (/* ... */), including multiline.
-                if inside_block_comment:
-                    if "*/" in line:
-                        inside_block_comment = False
-                    continue
-
-                if not line:
-                    continue
-                if line.startswith("//"):
-                    continue
-                if line.startswith("/*"):
-                    # If not closed on the same line, enter block-comment mode.
-                    if "*/" not in line:
-                        inside_block_comment = True
-                    continue
-
-                # MVP rule: one entry per line, must be a quoted entry.
-                if not (line.startswith('"') and line.endswith(";") and "=" in line):
-                    continue
-
-                # Split only on the first '=' to allow '=' inside values.
-                parts = line[:-1].split("=", 1)
-                left = parts[0].strip()
-
-                # Only accept well-quoted keys.
-                if left.startswith('"') and left.endswith('"'):
-                    key_inner = left[1:-1]
-                    keys.add(key_inner)
-
-    except (OSError, UnicodeDecodeError):
-        # Ignore read/encoding failures here; the main validator reports them.
-        return set()
-
-    return keys
-
 def _get_locale_from_path(file_path: Path) -> Optional[str]:
     """
     EN: Extract locale code from a path containing an `xx.lproj` directory.
@@ -282,24 +233,153 @@ def validate_locale_consistency(files: list[Path]) -> list[dict]:
         if len(locale_map) < 2:
             continue
 
-        baseline_locale = "en" if "en" in locale_map else next(iter(locale_map.keys()))
-        baseline_path = locale_map[baseline_locale]
-        baseline_keys = extract_keys(baseline_path)
+        # 1) Cache entries per locale (read each file once)
+        locale_entries: dict[str, dict[str, str]] = {}
+        for locale, path in locale_map.items():
+            locale_entries[locale] = extract_entries(path)
 
+        # 2) Pick baseline
+        baseline_locale = "en" if "en" in locale_map else next(iter(locale_map.keys()))
+        baseline_entries = locale_entries.get(baseline_locale, {})
+        baseline_keys = set(baseline_entries.keys())
+
+        # 3) Compare other locales against baseline
         for locale, path in locale_map.items():
             if locale == baseline_locale:
                 continue
 
-            current_keys = extract_keys(path)
-            missing = baseline_keys - current_keys
+            current_entries = locale_entries.get(locale, {})
+            issues.extend(validate_missing_keys(baseline_entries, current_entries, file_path=path))
+            issues.extend(validate_placeholder_consistency(baseline_entries, current_entries, file_path=path))
+                
+    return issues
 
-            for key in sorted(missing):
-                issues.append({
-                    "file": str(path),
-                    "line": None,
-                    "code": "MISSING_KEY_IN_LOCALE",
-                    "snippet": f'"{key}"',
-                    "severity": "ERROR",
-                })
+def validate_missing_keys(
+    baseline_entries: dict[str, str],
+    current_entries: dict[str, str],
+    *,
+    file_path: Path,
+) -> list[dict]:
+    """
+    EN: Validate that all baseline keys exist in current_entries.
+    ES: Validar que todas las claves del baseline existan en current_entries.
+    """
+    issues: list[dict] = []
+
+    baseline_keys = set(baseline_entries.keys())
+    current_keys = set(current_entries.keys())
+
+    missing = baseline_keys - current_keys
+
+    for key in sorted(missing):
+        issues.append({
+            "file": str(file_path),
+            "line": None,
+            "code": "MISSING_KEY_IN_LOCALE",
+            "snippet": f'"{key}"',
+            "severity": "ERROR",
+        })
 
     return issues
+
+def validate_placeholder_consistency(
+    baseline_entries: dict[str, str],
+    current_entries: dict[str, str],
+    *,
+    file_path: Path,
+) -> list[dict]:
+    """
+    EN: Validate that the placeholders in current_entries match those in baseline_entries.
+    ES: Validar que los placeholders en current_entries coincidan con los de baseline_entries.
+    """
+    issues: list[dict] = []
+
+    common_keys = set(baseline_entries.keys()) & set(current_entries.keys())
+
+    for key in sorted(common_keys):
+        base_value = baseline_entries.get(key, "")
+        cur_value = current_entries.get(key, "")
+
+        base_ph = extract_placeholders(base_value)
+        cur_ph = extract_placeholders(cur_value)
+
+        if base_ph != cur_ph:
+            issues.append({
+                "file": str(file_path),
+                "line": None,
+                "code": "PLACEHOLDER_MISMATCH",
+                "snippet": f'"{key}" baseline={base_ph} current={cur_ph}',
+                "severity": "ERROR",
+            })
+
+    return issues
+
+def extract_entries(file_path: Path) -> dict[str, str]:
+    """
+    EN: Extract key-value entries from a .strings file, ignoring comments and malformed lines.
+    ES: Extraer las entradas clave-valor de un fichero .strings, ignorando comentarios y líneas mal formadas.
+    """
+    entries: dict[str, str] = {}
+    inside_block_comment = False
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+
+                # Handle block comments (/* ... */), including multiline.
+                if inside_block_comment:
+                    if "*/" in line:
+                        inside_block_comment = False
+                    continue
+                
+                if not line:
+                    continue
+                if line.startswith("//"):
+                    continue
+                if line.startswith("/*"):
+                    # If not closed on the same line, enter block-comment mode.
+                    if "*/" not in line:
+                        inside_block_comment = True
+                    continue
+
+                # MVP rule: one entry per line, must be a quoted entry.
+                if not (line.startswith('"') and line.endswith(";") and "=" in line):
+                    continue
+
+                # Split only on the first '=' to allow '=' inside values.
+                parts = line[:-1].split("=", 1)
+                left = parts[0].strip()
+                right = parts[1].strip()
+                
+                # Only accept well-quoted keys.
+                if not (left.startswith('"') and left.endswith('"')):
+                    continue
+                if not (right.startswith('"') and right.endswith('"')):
+                    continue
+                
+                key_inner = left[1:-1]
+                value_inner = right[1:-1]
+                entries[key_inner] = value_inner
+                
+    except (OSError, UnicodeDecodeError):
+        # Ignore read/encoding failures here; the main validator reports them.
+        return {}
+
+    return entries
+
+
+_PLACEHOLDER_RE = re.compile(r'%(?:\d+\$)?[+\-#0 ]*\d*(?:\.\d+)?(?:hh|h|ll|l|q|z|t|j)?[@diufFeEgGxXoscpaA]')
+
+def extract_placeholders(value: str) -> list[str]:
+    """
+    EN: Extract printf-style placeholders from a .strings value (excluding %%).
+    ES: Extraer placeholders estilo printf de un value de .strings (excluyendo %%).
+    """
+    # Temporarily remove escaped percent literals so they don't get matched as placeholders.
+    # EN: '%%' means a literal '%', not a placeholder.
+    # ES: '%%' significa un '%' literal, no un placeholder.
+    cleaned = value.replace("%%", "")
+
+    return _PLACEHOLDER_RE.findall(cleaned)
+
