@@ -241,7 +241,6 @@ def validate_locale_consistency(files: list[Path]) -> list[dict]:
         # 2) Pick baseline
         baseline_locale = "en" if "en" in locale_map else next(iter(locale_map.keys()))
         baseline_entries = locale_entries.get(baseline_locale, {})
-        baseline_keys = set(baseline_entries.keys())
 
         # 3) Compare other locales against baseline
         for locale, path in locale_map.items():
@@ -255,8 +254,8 @@ def validate_locale_consistency(files: list[Path]) -> list[dict]:
     return issues
 
 def validate_missing_keys(
-    baseline_entries: dict[str, str],
-    current_entries: dict[str, str],
+    baseline_entries: dict[str, dict],
+    current_entries: dict[str, dict],
     *,
     file_path: Path,
 ) -> list[dict]:
@@ -272,9 +271,12 @@ def validate_missing_keys(
     missing = baseline_keys - current_keys
 
     for key in sorted(missing):
+        baseline_entry = baseline_entries.get(key)
+        baseline_line = baseline_entry["line"] if baseline_entry else None
+        
         issues.append({
             "file": str(file_path),
-            "line": None,
+            "line": baseline_line,
             "code": "MISSING_KEY_IN_LOCALE",
             "snippet": f'"{key}"',
             "severity": "ERROR",
@@ -283,8 +285,8 @@ def validate_missing_keys(
     return issues
 
 def validate_placeholder_consistency(
-    baseline_entries: dict[str, str],
-    current_entries: dict[str, str],
+    baseline_entries: dict[str, dict],
+    current_entries: dict[str, dict],
     *,
     file_path: Path,
 ) -> list[dict]:
@@ -297,8 +299,15 @@ def validate_placeholder_consistency(
     common_keys = set(baseline_entries.keys()) & set(current_entries.keys())
 
     for key in sorted(common_keys):
-        base_value = baseline_entries.get(key, "")
-        cur_value = current_entries.get(key, "")
+        base_entry = baseline_entries.get(key)
+        cur_entry = current_entries.get(key)
+
+        if not base_entry or not cur_entry:
+            continue
+
+        base_value = base_entry["value"]
+        cur_value = cur_entry["value"]
+        line_number = cur_entry["line"]
 
         base_ph = extract_placeholders(base_value)
         cur_ph = extract_placeholders(cur_value)
@@ -306,7 +315,7 @@ def validate_placeholder_consistency(
         if base_ph != cur_ph:
             issues.append({
                 "file": str(file_path),
-                "line": None,
+                "line": line_number,
                 "code": "PLACEHOLDER_MISMATCH",
                 "snippet": f'"{key}" baseline={base_ph} current={cur_ph}',
                 "severity": "ERROR",
@@ -314,17 +323,17 @@ def validate_placeholder_consistency(
 
     return issues
 
-def extract_entries(file_path: Path) -> dict[str, str]:
+def extract_entries(file_path: Path) -> dict[str, dict]:
     """
-    EN: Extract key-value entries from a .strings file, ignoring comments and malformed lines.
-    ES: Extraer las entradas clave-valor de un fichero .strings, ignorando comentarios y líneas mal formadas.
+    EN: Extract key-value entries from a .strings file, including line numbers.
+    ES: Extraer las entradas clave-valor de un fichero .strings, incluyendo número de línea.
     """
-    entries: dict[str, str] = {}
+    entries: dict[str, dict] = {}
     inside_block_comment = False
 
     try:
         with open(file_path, "r", encoding="utf-8") as f:
-            for line in f:
+            for line_number, line in enumerate(f, start=1):
                 line = line.strip()
 
                 # Handle block comments (/* ... */), including multiline.
@@ -332,42 +341,41 @@ def extract_entries(file_path: Path) -> dict[str, str]:
                     if "*/" in line:
                         inside_block_comment = False
                     continue
-                
+
                 if not line:
                     continue
                 if line.startswith("//"):
                     continue
                 if line.startswith("/*"):
-                    # If not closed on the same line, enter block-comment mode.
                     if "*/" not in line:
                         inside_block_comment = True
                     continue
 
-                # MVP rule: one entry per line, must be a quoted entry.
+                # MVP rule: one entry per line
                 if not (line.startswith('"') and line.endswith(";") and "=" in line):
                     continue
 
-                # Split only on the first '=' to allow '=' inside values.
                 parts = line[:-1].split("=", 1)
                 left = parts[0].strip()
                 right = parts[1].strip()
-                
-                # Only accept well-quoted keys.
+
                 if not (left.startswith('"') and left.endswith('"')):
                     continue
                 if not (right.startswith('"') and right.endswith('"')):
                     continue
-                
+
                 key_inner = left[1:-1]
                 value_inner = right[1:-1]
-                entries[key_inner] = value_inner
-                
+
+                entries[key_inner] = {
+                    "value": value_inner,
+                    "line": line_number
+                }
+
     except (OSError, UnicodeDecodeError):
-        # Ignore read/encoding failures here; the main validator reports them.
         return {}
 
     return entries
-
 
 _PLACEHOLDER_RE = re.compile(r'%(?:\d+\$)?[+\-#0 ]*\d*(?:\.\d+)?(?:hh|h|ll|l|q|z|t|j)?[@diufFeEgGxXoscpaA]')
 

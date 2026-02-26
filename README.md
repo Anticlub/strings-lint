@@ -1,121 +1,150 @@
-# strings-lint --- Apple `.strings` Validator (ES / EN)
+# strings-lint
 
-CLI tool written in Python to validate Apple `.strings` localization
-files (iOS/tvOS).\
-Herramienta CLI escrita en Python para validar ficheros de localización
-`.strings` de Apple (iOS/tvOS).
-
-Designed to detect syntax errors and localization inconsistencies before
-CI or runtime.\
-Diseñada para detectar errores sintácticos e inconsistencias de
-localización antes de CI o ejecución.
+CLI tool in Python to validate Apple `.strings` localization files
+(iOS/tvOS).\
+Herramienta CLI en Python para validar ficheros de localización
+`.strings` (iOS/tvOS).
 
 ------------------------------------------------------------------------
 
-# 📦 Requirements / Requisitos
+# 📚 Overview / Descripción general
 
--   Python **3.10+**
--   (Optional / Opcional) `pytest` for running tests
+**EN:**\
+This tool scans a repository, finds `.strings` files, validates their
+syntax, and performs cross-locale consistency checks (missing keys and
+placeholder mismatches). It is designed to be used locally or integrated
+into CI pipelines.
+
+**ES:**\
+Esta herramienta analiza un repositorio, localiza ficheros `.strings`,
+valida su sintaxis y realiza comprobaciones de consistencia entre
+idiomas (claves faltantes y discrepancias en placeholders). Está
+diseñada para uso local o integración en CI.
 
 ------------------------------------------------------------------------
 
-# 🚀 Quick Start / Uso rápido
+# 🚀 Installation / Instalación
+
+**EN:** Requires Python 3.10+. No heavy dependencies.
+
+**ES:** Requiere Python 3.10+. No tiene dependencias pesadas.
 
 ``` bash
+git clone <repo>
+cd strings-lint
 python3 validate_strings.py --root .
 ```
 
-Examples / Ejemplos:
+------------------------------------------------------------------------
+
+# 🖥 CLI Usage / Uso por línea de comandos
 
 ``` bash
-python3 validate_strings.py --root . --exclude "Pods|Carthage|DerivedData|SourcePackages|build|.git"
-python3 validate_strings.py --root . --format json
-python3 validate_strings.py --root . --include "Localizable\.strings$"
-python3 validate_strings.py --root . --fail-on warnings
+python validate_strings.py --root .
+python validate_strings.py --root . --format json
+python validate_strings.py --root . --exclude "Pods|Carthage|DerivedData|SourcePackages"
+```
+
+## Parameters / Parámetros
+
+  ---------------------------------------------------------------------------------
+  Parameter                     EN Description            ES Descripción
+  ----------------------------- ------------------------- -------------------------
+  `--root <path>`               Root directory to scan    Directorio raíz a
+                                (default `.`)             escanear (por defecto
+                                                          `.`)
+
+  `--exclude <regex>`           Regex for excluding paths Regex para excluir rutas
+
+  `--include <regex>`           Regex to filter files     Regex para filtrar
+                                (default `\.strings$`)    ficheros
+
+  `--format text|json`          Output format             Formato de salida
+
+  `--fail-on warnings|errors`   Exit behavior             Comportamiento del código
+                                                          de salida
+  ---------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+# 🔍 What Is Validated / Qué se valida
+
+## 1️⃣ Syntax Validation / Validación sintáctica
+
+**EN:** Detects basic format errors in `.strings` files.\
+**ES:** Detecta errores básicos de formato en ficheros `.strings`.
+
+### Checks performed / Comprobaciones realizadas
+
+-   Missing semicolons (`;`)
+-   Unbalanced quotes (`"`)
+-   Invalid escape sequences (`\`)
+-   Unexpected lines
+-   Unclosed block comments (`/* ... */`)
+-   Duplicate keys inside the same file
+
+### Example / Ejemplo
+
+``` strings
+"HELLO" = "Hola"
+```
+
+Output / Salida:
+
+``` json
+{
+  "file": "es.lproj/Localizable.strings",
+  "line": 12,
+  "code": "MISSING_SEMICOLON",
+  "snippet": "\"HELLO\" = \"Hola\"",
+  "severity": "ERROR"
+}
 ```
 
 ------------------------------------------------------------------------
 
-# 🖥 CLI Arguments / Parámetros CLI
+## 2️⃣ Locale Consistency / Consistencia entre idiomas
 
--   `--root <path>`\
-    Root directory to scan (default: `.`)\
-    Directorio raíz a escanear (por defecto `.`)
-
--   `--exclude <regex>`\
-    Regex to exclude paths\
-    Regex para excluir rutas
-
--   `--include <regex>`\
-    Regex to include files (default: `\.strings$`)\
-    Regex para incluir ficheros (por defecto `\.strings$`)
-
--   `--format text|json`\
-    Output format (default: `text`)\
-    Formato de salida (por defecto `text`)
-
--   `--fail-on errors|warnings`\
-    Exit code behavior for CI\
-    Comportamiento del código de salida en CI
+**EN:** When multiple `.lproj` variants exist (e.g., `en.lproj`,
+`es.lproj`), cross-locale validation is performed.\
+**ES:** Cuando existen varias variantes `.lproj` (por ejemplo
+`en.lproj`, `es.lproj`), se valida la consistencia entre idiomas.
 
 ------------------------------------------------------------------------
 
-# 🔎 What It Validates / Qué valida
+### 🔑 Missing Keys / Claves faltantes
 
-## 1️⃣ File Discovery / Descubrimiento de ficheros
+**EN:** If a key exists in the baseline (`en.lproj`) but is missing in
+another locale, it is reported.
 
--   Recursive scan from `--root`
--   Include/exclude filtering via regex
--   Detects `.lproj` localized variants
+**ES:** Si una clave existe en el baseline (`en.lproj`) pero falta en
+otro idioma, se reporta.
 
-------------------------------------------------------------------------
+``` json
+{
+  "file": "es.lproj/Localizable.strings",
+  "line": 87,
+  "code": "MISSING_KEY_IN_LOCALE",
+  "snippet": "\"PROFILE_TITLE\"",
+  "severity": "ERROR"
+}
+```
 
-## 2️⃣ Per-file Syntax Validation / Validación sintáctica por fichero
-
-MVP rule / Regla MVP: **one entry per line / una entrada por línea**.
-
-Each non-empty line must be: - `//` single-line comment - `/* ... */`
-block comment - `"KEY" = "VALUE";`
-
-Detects / Detecta:
-
--   `UNCLOSED_BLOCK_COMMENT`
--   `UNEXPECTED_LINE`
--   `MISSING_SEMICOLON`
--   `MISSING_EQUALS_SIGN`
--   `INVALID_KEY_QUOTING`
--   `INVALID_VALUE_QUOTING`
--   `INVALID_ESCAPE_SEQUENCE`
--   `INCOMPLETE_ESCAPE_SEQUENCE`
--   `FILE_READ_ERROR`
--   `DUPLICATE_KEY`
--   `BLOCK_COMMENT_WITH_ENTRY` (warning)
+**Line reporting strategy / Estrategia de línea:**\
+- EN: The reported line corresponds to where the key is defined in the
+baseline file.\
+- ES: La línea reportada corresponde a donde está definida la clave en
+el fichero baseline.
 
 ------------------------------------------------------------------------
 
-## 3️⃣ Locale Consistency (Baseline Rule)
+### 🧩 Placeholder Consistency / Consistencia de placeholders
 
-## Consistencia entre idiomas (Regla baseline)
+**EN:** Ensures placeholder types and counts match across locales.\
+**ES:** Asegura que el tipo y número de placeholders coincidan entre
+idiomas.
 
-Baseline selection: - Uses `en.lproj` if present - Otherwise uses the
-first detected locale
-
-Validates: - All baseline keys exist in other locales - Reports
-`MISSING_KEY_IN_LOCALE`
-
-------------------------------------------------------------------------
-
-## 4️⃣ Placeholder Consistency / Consistencia de placeholders
-
-The validator checks that placeholders match between baseline and other
-locales.
-
-El validador comprueba que los placeholders coincidan entre el baseline
-y los otros idiomas.
-
-Supported printf-style placeholders:
-
-### Basic Specifiers / Especificadores básicos
+Supported placeholders / Placeholders soportados:
 
 -   `%@`
 -   `%d`
@@ -135,115 +164,100 @@ Supported printf-style placeholders:
 -   `%p`
 -   `%a`
 -   `%A`
+-   Length modifiers: `hh`, `h`, `l`, `ll`, `q`, `z`, `t`, `j`
+-   Positional arguments: `%1$@`, `%2$d`, etc.
 
-### Length Modifiers / Modificadores de longitud
+### Example / Ejemplo
 
--   `%hd`
--   `%ld`
--   `%lld`
--   `%zd`
--   `%td`
--   `%jd`
--   `%qd`
--   `%hhd`
--   `%llx`
--   `%llu`
--   etc. combinations following printf specification
+Baseline:
 
-### Positional Arguments / Argumentos posicionales
-
--   `%1$@`
--   `%2$d`
--   `%3$ld`
-
-### Flags and Width / Flags y ancho
-
-Supports patterns like:
-
--   `%02d`
--   `%+5.2f`
--   `%-10s`
--   `%#x`
-
-Literal percent (`%%`) is ignored (not treated as placeholder).\
-El porcentaje literal (`%%`) se ignora.
-
-Reports: - `PLACEHOLDER_MISMATCH`
-
-------------------------------------------------------------------------
-
-# 📤 Output / Salida
-
-## Text format (default) / Formato texto
-
--   Issues grouped by file
--   Summary including:
-    -   Files scanned
-    -   Files with errors
-    -   Total errors
-    -   Total warnings
-
-## JSON format / Formato JSON
-
-Contains: - `summary` - `issues`: - `file` - `line` - `code` -
-`snippet` - `severity`
-
-------------------------------------------------------------------------
-
-# 🔁 Exit Codes / Códigos de salida
-
--   `0` → no errors (default mode)
--   `1` → errors found
--   `1` → warnings found if `--fail-on warnings`
-
-------------------------------------------------------------------------
-
-# 🧪 Tests
-
-Run:
-
-``` bash
-python3 -m pytest
+``` strings
+"WELCOME" = "Welcome %@, you have %d messages";
 ```
 
-Tests use temporary directories (`tmp_path`) to ensure portability.\
-Los tests usan directorios temporales para garantizar portabilidad.
+Incorrect Spanish:
+
+``` strings
+"WELCOME" = "Bienvenido %@";
+```
+
+Output:
+
+``` json
+{
+  "file": "es.lproj/Localizable.strings",
+  "line": 142,
+  "code": "PLACEHOLDER_MISMATCH",
+  "snippet": "\"WELCOME\" baseline=['%@', '%d'] current=['%@']",
+  "severity": "ERROR"
+}
+```
+
+**Line reporting strategy / Estrategia de línea:**\
+- EN: The reported line corresponds to the inconsistent locale file.\
+- ES: La línea reportada corresponde al fichero del idioma
+inconsistente.
 
 ------------------------------------------------------------------------
 
-# 🏗 Architecture / Arquitectura
+# 📐 Line Reporting Design / Diseño del reporte de líneas
 
-    strings_lint/
-        scanner.py
-        validator.py
-        reporter.py
-    validate_strings.py
+**EN:**\
+- Syntax errors → report actual file line.\
+- Placeholder mismatches → report current locale line.\
+- Missing keys → report baseline definition line.
 
-Modular separation: - Scanner (file discovery) - Validator (syntax +
-consistency checks) - Reporter (output formatting)
+**ES:**\
+- Errores sintácticos → reportan la línea real del fichero.\
+- Desajustes de placeholders → reportan la línea del locale actual.\
+- Claves faltantes → reportan la línea donde la clave está definida en
+el baseline.
 
-Separación modular clara para facilitar mantenimiento y futuras mejoras.
-
-------------------------------------------------------------------------
-
-# ⚡ Performance
-
--   Files are parsed once per locale group
--   No unnecessary O(n²) comparisons
--   Suitable for large repositories
-
-Adecuado para repositorios grandes sin degradación significativa.
+This improves traceability without extra file reads.\
+Esto mejora la trazabilidad sin lecturas adicionales de fichero.
 
 ------------------------------------------------------------------------
 
-# 📌 Limitations / Limitaciones
+# 🧪 Tests / Tests
 
--   MVP assumes one entry per line
--   Multiline values are not supported
--   Does not implement autofix (by design)
+**EN:** Includes fixtures for valid files, syntax errors, missing keys,
+and placeholder mismatches.\
+**ES:** Incluye fixtures para ficheros válidos, errores sintácticos,
+claves faltantes y errores de placeholders.
+
+Run tests / Ejecutar tests:
+
+``` bash
+pytest
+```
 
 ------------------------------------------------------------------------
 
-# 📄 License
+# 🏁 Exit Codes / Códigos de salida
 
-Internal/educational project example.
+  Code   EN Meaning        ES Significado
+  ------ ----------------- -----------------------
+  0      No errors         Sin errores
+  1      Errors detected   Se detectaron errores
+
+------------------------------------------------------------------------
+
+# 🎯 Design Philosophy / Filosofía de diseño
+
+**EN:**\
+- Single file read per locale (cached entries)\
+- Lightweight parsing\
+- CI-friendly structured output\
+- Clear and explicit MVP constraints
+
+**ES:**\
+- Una sola lectura por fichero (caché de entradas)\
+- Parseo ligero\
+- Salida estructurada compatible con CI\
+- Restricciones MVP explícitas
+
+------------------------------------------------------------------------
+
+# 📄 License / Licencia
+
+Internal tooling / Herramienta interna.
