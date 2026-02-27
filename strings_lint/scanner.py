@@ -1,6 +1,8 @@
 from pathlib import Path
 import re
 
+DEFAULT_EXCLUDE = r"(^|/)(tests|\.git|__pycache__|build|Pods|Carthage|DerivedData|SourcePackages)(/|$)"
+
 
 def find_strings_files(root_path: Path, *, include_pattern: str, exclude_pattern: str) -> list[Path]:
     """
@@ -8,7 +10,13 @@ def find_strings_files(root_path: Path, *, include_pattern: str, exclude_pattern
     ES: Buscar recursivamente ficheros que cumplan el include regex y no el exclude regex.
     """
     include_re = re.compile(include_pattern)
-    exclude_re = re.compile(exclude_pattern) if exclude_pattern else None
+    
+    if exclude_pattern:
+        combined_exclude = f"(?:{DEFAULT_EXCLUDE})|(?:{exclude_pattern})"
+    else:
+        combined_exclude = DEFAULT_EXCLUDE
+        
+    exclude_re = re.compile(combined_exclude)
 
     matched_files: list[Path] = []
 
